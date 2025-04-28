@@ -1,12 +1,16 @@
 """
-Telegram бот для клиентов (версия python-telegram-bot v20.x)
-Основной функционал:
-- Прием заявок с геоданными
-- Интерактивное меню
-- Интеграция с Google Sheets
+📋 КЛИЕНТСКИЙ БОТ ДЛЯ ГЕОДЕЗИЧЕСКИХ УСЛУГ (v2.1)
+
+Основные функции:
+✅ Прием заявок с геолокацией/адресом
+✅ Сбор контактных данных
+✅ Интеграция с Google Sheets
+✅ Красивый интерфейс с emoji
 """
 
 import logging
+import pytz
+from datetime import datetime
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -23,192 +27,245 @@ from telegram.ext import (
 )
 from services.gsheets import append_to_sheet
 
-# ==================== НАСТРОЙКА ЛОГИРОВАНИЯ ====================
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+# ⚙️ Н А С Т Р О Й К И
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+
+# 🕒 Настройка временной зоны
+TIMEZONE = pytz.timezone('Europe/Moscow')
+
+# 📊 Уровни логирования
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     filename='client_bot.log'
 )
 logger = logging.getLogger(__name__)
 
-# ==================== КОНСТАНТЫ И СОСТОЯНИЯ ====================
+# 📌 Состояния диалога
 (
     MAIN_MENU,
     GET_LOCATION,
-    GET_PHONE,
-    FAQ_HANDLER
-) = range(4)  # Состояния диалога
+    GET_PHONE
+) = range(3)
 
-# Эмодзи для интерфейса
-EMOJI = {
-    'home': '🏠',
-    'doc': '📄',
-    'phone': '📱',
-    'geo': '📍',
-    'back': '🔙',
-    'quest': '❓',
-    'info': 'ℹ️'
-}
-
-# ==================== ТЕКСТОВЫЕ ШАБЛОНЫ ====================
+# 🔠 Текстовые шаблоны с emoji
 TEXTS = {
-    'welcome': (
-        f"{EMOJI['home']} <b>Геодезические услуги</b>\n\n"
-        "Выберите действие из меню ниже:"
-    ),
-    'request': (
-        f"{EMOJI['doc']} <b>Новая заявка</b>\n\n"
-        "Как вы хотите указать местоположение?"
-    ),
-    'location_received': (
-        f"{EMOJI['geo']} <b>Местоположение получено</b>\n\n"
-        "Теперь укажите ваш телефон:"
-    ),
-    'phone_received': (
-        f"{EMOJI['phone']} <b>Заявка принята!</b>\n\n"
-        "Наш специалист свяжется с вами в течение рабочего дня."
-    ),
-    'cancel': f"{EMOJI['back']} Действие отменено"
+    'welcome': 
+        """
+        🏠 <b>ГЕОДЕЗИЧЕСКИЕ УСЛУГИ</b>
+
+        Добро пожаловать! Чем могу помочь?
+        """,
+    
+    'request': 
+        """
+        📍 <b>НОВАЯ ЗАЯВКА</b>
+        
+        Укажите местоположение объекта:
+        """,
+    
+    'location_received':
+        """
+        ✅ <b>МЕСТОПОЛОЖЕНИЕ ПРИНЯТО</b>
+        
+        Теперь укажите ваш телефон:
+        """,
+    
+    'success':
+        """
+        ✨ <b>ЗАЯВКА ПРИНЯТА!</b>
+        
+        Наш специалист свяжется с вами 
+        в течение 24 часов.
+        """
 }
 
-# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик стартовой команды и главного меню"""
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+# 🖥 О С Н О В Н О Й   И Н Т Е Р Ф Е Й С
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    🏠 Главное меню
+    Показывает основные кнопки интерфейса
+    """
     menu_buttons = [
-        [f"{EMOJI['doc']} Отправить заявку"],
-        [f"{EMOJI['quest']} Вопросы", f"{EMOJI['info']} Контакты"],
-        ["О компании"]
+        ["📨 Отправить заявку"],
+        ["❓ Частые вопросы", "📞 Контакты"],
+        ["ℹ️ О компании"]
     ]
     
     await update.message.reply_text(
         text=TEXTS['welcome'],
-        reply_markup=ReplyKeyboardMarkup(menu_buttons, resize_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup(
+            menu_buttons, 
+            resize_keyboard=True,
+            input_field_placeholder="Выберите действие..."
+        ),
         parse_mode='HTML'
     )
     return MAIN_MENU
 
-async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик создания новой заявки"""
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+# 📝 О Б Р А Б О Т Ч И К И   З А Я В О К
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+
+async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    📨 Начало оформления заявки
+    Предлагает выбрать способ указания местоположения
+    """
     location_buttons = [
-        [KeyboardButton(f"{EMOJI['geo']} Отправить геолокацию", request_location=True)],
-        ["Указать адрес вручную"],
-        [f"{EMOJI['back']} Назад"]
+        [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
+        ["🏠 Указать адрес"],
+        ["🔙 Назад"]
     ]
     
     await update.message.reply_text(
         text=TEXTS['request'],
-        reply_markup=ReplyKeyboardMarkup(location_buttons, resize_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup(
+            location_buttons,
+            resize_keyboard=True
+        ),
         parse_mode='HTML'
     )
     return GET_LOCATION
 
-async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение местоположения (гео или адрес)"""
+async def process_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    📍 Обработка местоположения
+    Сохраняет геолокацию или адрес и запрашивает телефон
+    """
     if update.message.location:
-        # Обработка геолокации
+        # 🌐 Обработка геолокации
         loc = update.message.location
-        context.user_data['location'] = f"lat:{loc.latitude}, lon:{loc.longitude}"
-        logger.info(f"Получена геолокация: {loc.latitude}, {loc.longitude}")
+        context.user_data['location'] = {
+            'type': 'geo',
+            'lat': loc.latitude,
+            'lon': loc.longitude
+        }
+        logger.info(f"Получена геолокация: {loc.latitude},{loc.longitude}")
     else:
-        # Обработка текстового адреса
-        context.user_data['location'] = update.message.text
+        # 🏠 Обработка адреса
+        context.user_data['location'] = {
+            'type': 'address',
+            'text': update.message.text
+        }
         logger.info(f"Получен адрес: {update.message.text}")
 
+    # 📱 Запрос телефона
     phone_buttons = [
-        [KeyboardButton(f"{EMOJI['phone']} Отправить телефон", request_contact=True)],
-        [f"{EMOJI['back']} Назад"]
+        [KeyboardButton("📱 Отправить телефон", request_contact=True)],
+        ["🔙 Назад"]
     ]
     
     await update.message.reply_text(
         text=TEXTS['location_received'],
-        reply_markup=ReplyKeyboardMarkup(phone_buttons, resize_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup(
+            phone_buttons,
+            resize_keyboard=True
+        ),
         parse_mode='HTML'
     )
     return GET_PHONE
 
-async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение контактных данных"""
-    if update.message.contact:
-        phone = update.message.contact.phone_number
-    else:
-        phone = update.message.text
-
+async def process_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    📞 Обработка телефона
+    Сохраняет заявку и завершает процесс
+    """
+    # Получаем телефон
+    phone = update.message.contact.phone_number if update.message.contact else update.message.text
+    
     try:
-        # Сохранение в Google Sheets
+        # 📊 Сохранение в Google Sheets
+        location = context.user_data['location']
+        address = (
+            f"{location['lat']},{location['lon']}" 
+            if location['type'] == 'geo' 
+            else location['text']
+        )
+        
         append_to_sheet(
-            address=context.user_data['location'],
+            address=address,
             phone=phone
         )
-        logger.info("Данные сохранены в Google Sheets")
         
+        logger.info("✅ Заявка сохранена")
+        
+        # 🎉 Подтверждение пользователю
         await update.message.reply_text(
-            text=TEXTS['phone_received'],
+            text=TEXTS['success'],
             reply_markup=ReplyKeyboardRemove(),
             parse_mode='HTML'
         )
+        
     except Exception as e:
-        logger.error(f"Ошибка сохранения: {e}")
+        logger.error(f"❌ Ошибка сохранения: {e}")
         await update.message.reply_text(
-            "⚠️ Ошибка при сохранении заявки. Попробуйте позже.",
+            "⚠️ Произошла ошибка. Пожалуйста, попробуйте позже.",
             reply_markup=ReplyKeyboardRemove()
         )
     
-    return await start(update, context)  # Возврат в главное меню
+    return await show_main_menu(update, context)
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена текущего действия"""
-    await update.message.reply_text(
-        text=TEXTS['cancel'],
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return await start(update, context)
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+# 🚀 З А П У С К   Б О Т А
+# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
 
-# ==================== ЗАПУСК БОТА ====================
 def run_client_bot(token: str):
-    """Инициализация и запуск бота"""
+    """
+    🔌 Основная функция запуска бота
+    Настраивает и запускает Telegram-бота
+    """
     try:
-        logger.info("Инициализация клиентского бота...")
+        logger.info("🔄 Инициализация бота...")
         
         # Создаем Application
-        application = Application.builder().token(token).build()
+        app = Application.builder() \
+            .token(token) \
+            .post_init(_setup_timezone) \
+            .build()
         
-        # Настройка ConversationHandler
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler("start", start)],
-            states={
-                MAIN_MENU: [
-                    MessageHandler(
-                        filters.Regex(f"^{EMOJI['doc']} Отправить заявку$"),
-                        handle_request
-                    )
-                ],
-                GET_LOCATION: [
-                    MessageHandler(filters.LOCATION, receive_location),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, receive_location),
-                    MessageHandler(
-                        filters.Regex(f"^{EMOJI['back']} Назад$"),
-                        cancel
-                    )
-                ],
-                GET_PHONE: [
-                    MessageHandler(filters.CONTACT, receive_phone),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, receive_phone),
-                    MessageHandler(
-                        filters.Regex(f"^{EMOJI['back']} Назад$"),
-                        cancel
-                    )
-                ]
-            },
-            fallbacks=[CommandHandler("cancel", cancel)],
-        )
+        # Настраиваем обработчики
+        _setup_handlers(app)
         
-        # Регистрация обработчиков
-        application.add_handler(conv_handler)
-        
-        # Запуск бота
-        logger.info("Бот запущен в режиме polling...")
-        application.run_polling()
+        logger.info("🤖 Бот запущен и готов к работе!")
+        app.run_polling()
         
     except Exception as e:
-        logger.critical(f"Ошибка запуска бота: {e}")
+        logger.critical(f"💥 Критическая ошибка: {e}")
         raise
+
+async def _setup_timezone(app: Application):
+    """⏰ Установка временной зоны"""
+    app.job_queue.scheduler.configure(timezone=TIMEZONE)
+    logger.info(f"⏱ Установлена временная зона: {TIMEZONE}")
+
+def _setup_handlers(app: Application):
+    """🛠 Настройка обработчиков команд"""
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", show_main_menu),
+            MessageHandler(filters.Regex("^📨 Отправить заявку$"), start_request)
+        ],
+        states={
+            MAIN_MENU: [
+                MessageHandler(filters.Regex("^📨 Отправить заявку$"), start_request)
+            ],
+            GET_LOCATION: [
+                MessageHandler(filters.LOCATION, process_location),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_location)
+            ],
+            GET_PHONE: [
+                MessageHandler(filters.CONTACT, process_phone),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_phone)
+            ]
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex("^🔙 Назад$"), show_main_menu)
+        ],
+    )
+    
+    app.add_handler(conv_handler)
