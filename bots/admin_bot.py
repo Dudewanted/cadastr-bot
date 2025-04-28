@@ -2,28 +2,51 @@
 🛠 АДМИНИСТРАТИВНЫЙ БОТ ДЛЯ УПРАВЛЕНИЯ ЗАЯВКАМИ
 
 ▌ Основной функционал:
-├── 📊 Просмотр новых заявок
-├── ✏️ Изменение статусов
+├── 📋 Просмотр новых заявок
+├── ✏️ Изменение статусов (Новая/В работе/Завершена)
 ├── 📞 Быстрый контакт с клиентом
 └── 📊 Статистика обработки
 
 ▌ Особенности реализации:
-✔ Поддержка python-telegram-bot 20.x
-✔ Интеграция с Google Sheets
-✔ Логирование всех действий
-✔ Гибкая система команд
+✔ Полная интеграция с Google Sheets
+✔ Интерактивные inline-кнопки
+✔ Подробное логирование действий
+✔ Поддержка временной зоны (Europe/Moscow)
 """
 
 import logging
+import sys
 import pytz
 from datetime import datetime
 from typing import Dict, Any
 
+# ====================
+# ⚙️ НАСТРОЙКА СИСТЕМЫ
+# ====================
+
+# Конфигурация временной зоны
+TIMEZONE = pytz.timezone('Europe/Moscow')
+
+# Настройка логирования
+logging.basicConfig(
+    format='🛠 [%(asctime)s] %(name)s │ %(levelname)-8s │ %(message)s',
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler('admin_bot.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ====================
+# 📦 ИМПОРТ КОМПОНЕНТОВ
+# ====================
+
 from telegram import (
     Update,
-    ReplyKeyboardMarkup,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup
 )
 from telegram.ext import (
     Application,
@@ -36,35 +59,19 @@ from telegram.ext import (
 from services.gsheets import get_worksheet
 
 # ====================
-# ⚙️ НАСТРОЙКИ СИСТЕМЫ
+# 🏷 СИСТЕМА СТАТУСОВ
 # ====================
 
-# Логирование
-logging.basicConfig(
-    format='🛠 [%(asctime)s] %(levelname)s - %(name)s: %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler('admin_bot.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Временная зона
-MOSCOW_TZ = pytz.timezone('Europe/Moscow')
-
-# ====================
-# 🗂 КОНСТАНТЫ И ТЕКСТЫ
-# ====================
-
-# Статусы заявок
 STATUSES = {
-    'new': '🆕 Новая',
-    'in_progress': '🔄 В работе',
-    'completed': '✅ Завершена'
+    'new': {'text': '🆕 Новая', 'column': 'Статус'},
+    'progress': {'text': '🔄 В работе', 'column': 'Статус'},
+    'completed': {'text': '✅ Завершена', 'column': 'Статус'}
 }
 
-# Текстовые шаблоны
+# ====================
+# 📝 ТЕКСТОВЫЕ ШАБЛОНЫ
+# ====================
+
 TEXTS = {
     'welcome': 
         """
@@ -73,24 +80,30 @@ TEXTS = {
         Выберите действие:
         """,
     
-    'request_details': 
+    'request': 
         """
         📋 <b>ЗАЯВКА #{id}</b>
         
         📍 Адрес: {address}
-        📞 Телефон: {phone}
+        📞 Телефон: <code>{phone}</code>
         📅 Дата: {date}
         🏷 Статус: {status}
-        """
+        """,
+    
+    'no_requests': 
+        "📭 Нет новых заявок",
+    
+    'status_updated':
+        "🔄 Статус заявки #{id} изменен на: {status}"
 }
 
 # ====================
-# 🖥 ОСНОВНЫЕ ФУНКЦИИ
+# 🖥 ОСНОВНЫЕ ОБРАБОТЧИКИ
 # ====================
 
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает главное меню администратора"""
-    buttons = [
+    menu_buttons = [
         ["🆕 Новые заявки"],
         ["📊 Статистика"],
         ["⚙️ Настройки"]
@@ -99,103 +112,156 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         text=TEXTS['welcome'],
         reply_markup=ReplyKeyboardMarkup(
-            buttons,
+            menu_buttons,
             resize_keyboard=True,
             input_field_placeholder="Выберите действие..."
         ),
         parse_mode='HTML'
     )
 
-async def show_new_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_new_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отображает список новых заявок"""
     try:
         worksheet = get_worksheet()
         records = worksheet.get_all_records()
-        new_requests = [r for r in records if r['Статус'] == 'Новая']
+        new_requests = [r for r in records if r['Статус'] == STATUSES['new']['text']]
         
         if not new_requests:
-            await update.message.reply_text("📭 Нет новых заявок")
+            await update.message.reply_text(TEXTS['no_requests'])
             return
         
         for request in new_requests:
             keyboard = [
                 [
-                    InlineKeyboardButton("📞 Позвонить", callback_data=f"call_{request['Телефон']}"),
-                    InlineKeyboardButton("🔄 В работу", callback_data=f"progress_{request['ID']}")
+                    InlineKeyboardButton(
+                        "📞 Позвонить", 
+                        callback_data=f"call_{request['Телефон']}"
+                    ),
+                    InlineKeyboardButton(
+                        "🔄 В работу", 
+                        callback_data=f"status_progress_{request['ID']}"
+                    )
                 ],
                 [
-                    InlineKeyboardButton("✅ Завершить", callback_data=f"complete_{request['ID']}")
+                    InlineKeyboardButton(
+                        "✅ Завершить", 
+                        callback_data=f"status_completed_{request['ID']}"
+                    )
                 ]
             ]
             
             await update.message.reply_text(
-                text=TEXTS['request_details'].format(
+                text=TEXTS['request'].format(
                     id=request['ID'],
                     address=request['Адрес'],
                     phone=request['Телефон'],
                     date=request['Дата'],
-                    status=STATUSES['new']
+                    status=request['Статус']
                 ),
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='HTML'
             )
             
     except Exception as e:
-        logger.error(f"Ошибка при загрузке заявок: {e}")
+        logger.error(f"Ошибка загрузки заявок: {e}")
         await update.message.reply_text("⚠️ Ошибка загрузки данных")
 
-async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает нажатия inline-кнопок"""
     query = update.callback_query
     await query.answer()
     
-    if query.data.startswith('call_'):
-        phone = query.data.split('_')[1]
-        await query.edit_message_text(f"📞 Наберите номер: {phone}")
-        
-    elif query.data.startswith('progress_'):
-        request_id = query.data.split('_')[1]
-        await _update_request_status(request_id, 'in_progress', query)
-        
-    elif query.data.startswith('complete_'):
-        request_id = query.data.split('_')[1]
-        await _update_request_status(request_id, 'completed', query)
+    try:
+        if query.data.startswith('call_'):
+            # Обработка кнопки звонка
+            phone = query.data.split('_')[1]
+            await query.edit_message_text(f"📞 Наберите номер: <code>{phone}</code>", parse_mode='HTML')
+            
+        elif query.data.startswith('status_'):
+            # Обработка изменения статуса
+            action, request_id = query.data.split('_')[1], query.data.split('_')[2]
+            new_status = STATUSES[action]['text']
+            
+            # Обновляем статус в Google Sheets
+            worksheet = get_worksheet()
+            cell = worksheet.find(request_id)
+            worksheet.update_cell(cell.row, 5, new_status)
+            
+            await query.edit_message_text(
+                text=TEXTS['status_updated'].format(
+                    id=request_id,
+                    status=new_status
+                )
+            )
+            logger.info(f"Обновлен статус заявки #{request_id} на '{new_status}'")
+            
+    except Exception as e:
+        logger.error(f"Ошибка обработки callback: {e}")
+        await query.edit_message_text("⚠️ Ошибка обработки запроса")
 
-async def _update_request_status(request_id: str, status: str, query):
-    """Обновляет статус заявки в таблице"""
+# ====================
+# 📊 ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ
+# ====================
+
+async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает статистику обработки заявок"""
     try:
         worksheet = get_worksheet()
-        cell = worksheet.find(request_id)
-        worksheet.update_cell(cell.row, 5, STATUSES[status])
+        records = worksheet.get_all_records()
         
-        await query.edit_message_text(
-            text=f"🔄 Статус заявки #{request_id} изменен на '{STATUSES[status]}'"
+        stats = {
+            'new': 0,
+            'progress': 0,
+            'completed': 0
+        }
+        
+        for r in records:
+            if STATUSES['new']['text'] in r['Статус']:
+                stats['new'] += 1
+            elif STATUSES['progress']['text'] in r['Статус']:
+                stats['progress'] += 1
+            elif STATUSES['completed']['text'] in r['Статус']:
+                stats['completed'] += 1
+                
+        message = (
+            "📊 <b>СТАТИСТИКА ОБРАБОТКИ</b>\n\n"
+            f"🆕 Новые: {stats['new']}\n"
+            f"🔄 В работе: {stats['progress']}\n"
+            f"✅ Завершено: {stats['completed']}\n"
+            f"📌 Всего: {len(records)}"
         )
-        logger.info(f"Обновлен статус заявки #{request_id}")
+        
+        await update.message.reply_text(
+            text=message,
+            parse_mode='HTML'
+        )
         
     except Exception as e:
-        logger.error(f"Ошибка обновления статуса: {e}")
-        await query.edit_message_text("⚠️ Ошибка обновления статуса")
+        logger.error(f"Ошибка загрузки статистики: {e}")
+        await update.message.reply_text("⚠️ Ошибка загрузки статистики")
 
 # ====================
 # 🚀 ЗАПУСК БОТА
 # ====================
 
-def run_admin_bot(token: str):
+def run_admin_bot(token: str) -> None:
     """Запускает административного бота"""
     try:
-        logger.info("🔄 Инициализация админского бота...")
+        logger.info("Инициализация админ-панели...")
         
-        application = Application.builder().token(token).build()
+        application = Application.builder() \
+            .token(token) \
+            .build()
         
         # Регистрация обработчиков
-        application.add_handler(CommandHandler("start", show_main_menu))
+        application.add_handler(CommandHandler("start", show_dashboard))
         application.add_handler(MessageHandler(filters.Regex("^🆕 Новые заявки$"), show_new_requests))
-        application.add_handler(CallbackQueryHandler(handle_button_click))
+        application.add_handler(MessageHandler(filters.Regex("^📊 Статистика$"), show_stats))
+        application.add_handler(CallbackQueryHandler(handle_callback))
         
-        logger.info("🤖 Админский бот запущен и готов к работе")
+        logger.info("Админ-панель запущена")
         application.run_polling()
         
     except Exception as e:
-        logger.critical(f"💥 Критическая ошибка: {e}")
+        logger.critical(f"Критическая ошибка: {e}")
         raise
