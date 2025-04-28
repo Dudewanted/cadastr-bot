@@ -1,51 +1,40 @@
 """
-Пакет bots содержит модули для телеграм-ботов:
-- client_bot.py - бот для взаимодействия с клиентами
-- admin_bot.py - бот для администратора
+Пакет bots - реализация Telegram-ботов для кадастровых услуг
 
-При инициализации пакета выполняется проверка зависимостей.
+Экспортирует основные функции для управления ботами:
+- run_client_bot - запуск бота для клиентов
+- run_admin_bot - запуск бота для администратора
+
+Версия: 2.0 (адаптировано под python-telegram-bot v20.x)
 """
 
-import logging
-from importlib.metadata import version, PackageNotFoundError
+# Основные экспортируемые функции
+from .client_bot import run_client_bot  # noqa: F401
+from .admin_bot import run_admin_bot    # noqa: F401
 
-# Настройка логгера для пакета
-_logger = logging.getLogger(__name__)
+# Дополнительные утилиты (при необходимости)
+#from .utils import (                   # noqa: F401
+    #setup_logging,
+    #validate_config
+#)
 
-# Проверка необходимых зависимостей
-REQUIRED_PACKAGES = [
-    'python-dotenv',
-    'pyTelegramBotAPI',
-    'gspread',
-    'oauth2client'
+# Определение публичного API пакета
+__all__ = [
+    'run_client_bot',
+    'run_admin_bot',
+    'setup_logging',
+    'validate_config'
 ]
 
-def check_dependencies():
-    """Проверяет наличие и версии требуемых пакетов"""
-    missing_packages = []
-    for package in REQUIRED_PACKAGES:
-        try:
-            v = version(package)
-            _logger.info(f"Пакет {package} найден (версия {v})")
-        except PackageNotFoundError:
-            missing_packages.append(package)
-            _logger.error(f"Пакет {package} не найден")
-    
-    if missing_packages:
-        raise ImportError(
-            f"Отсутствуют необходимые пакеты: {', '.join(missing_packages)}. "
-            "Установите их через pip install -r requirements.txt"
-        )
+# Мета-данные пакета
+__version__ = '2.0.0'
+__author__ = 'Ваше имя/компания'
+__license__ = 'MIT'
 
-# При импорте пакета автоматически проверяем зависимости
-try:
-    check_dependencies()
-except ImportError as e:
-    _logger.critical(str(e))
-    raise
+# Настройка логгера пакета
+import logging
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-# Импорт основных классов для удобного доступа
-from .client_bot import ClientBot  # noqa
-from .admin_bot import AdminBot    # noqa
-
-__all__ = ['ClientBot', 'AdminBot']
+def get_version():
+    """Возвращает текущую версию пакета"""
+    return __version__
