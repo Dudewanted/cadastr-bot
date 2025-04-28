@@ -1,350 +1,186 @@
-import json
+"""
+Telegram бот для клиентов кадастровых услуг.
+Основные функции:
+- Прием заявок с геолокацией/адресом и контактными данными
+- Ответы на частые вопросы
+- Предоставление контактной информации
+"""
+
 import logging
-from telegram import (
-    ReplyKeyboardRemove,
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup
-)
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
-    Updater,
-    ConversationHandler,
+    ApplicationBuilder,
+    ContextTypes,
     CommandHandler,
     MessageHandler,
-    Filters,
-    CallbackContext,
-    CallbackQueryHandler
+    filters,
+    ConversationHandler,
 )
-import os
-from dotenv import load_dotenv
-from gsheets import append_to_sheet, get_worksheet
-from datetime import datetime
-import pytz
+from services.gsheets import append_to_sheet
 
-# Настройка логгирования
+# Настройка логирования
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    filename="client_bot.log"  # Логи будут сохраняться в файл
 )
 logger = logging.getLogger(__name__)
 
-# Состояния для конечного автомата
-(
-    SEND_LOCATION,
-    SEND_PHONE,
-    FAQ,
-    CONTACTS,
-    ABOUT
-) = range(5)
+# =============================================
+# КОНСТАНТЫ И НАСТРОЙКИ
+# =============================================
 
-# Кэш частых вопросов
-faq_cache = None
+# Состояния для ConversationHandler
+LOCATION, PHONE = range(2)
 
-def start(update: Update, context: CallbackContext) -> None:
-    """Обработчик команды /start"""
-    keyboard = [
-        [
-            InlineKeyboardButton("📍 Отправить заявку", callback_data='send_request'),
-            InlineKeyboardButton("❓ Частые вопросы", callback_data='faq')
-        ],
-        [
-            InlineKeyboardButton("📌 Контакты", callback_data='contacts'),
-            InlineKeyboardButton("ℹ️ О нас", callback_data='about')
-        ]
+# Текстовые шаблоны
+TEXTS = {
+    "welcome": "🏠 <b>Геодезические и кадастровые услуги</b>\n\n"
+               "Выберите действие из меню ниже:",
+    "request": "📍 <b>Отправка заявки</b>\n\n"
+               "Пожалуйста, укажите местоположение объекта:",
+    "location_received": "✅ <b>Местоположение получено</b>\n\n"
+                        "Теперь укажите ваш телефон:",
+    "phone_received": "📝 <b>Спасибо за заявку!</b>\n\n"
+                      "Наш специалист свяжется с вами в течение 24 часов.",
+    "cancel": "🚫 Действие отменено. Возврат в главное меню."
+}
+
+# =============================================
+# ОСНОВНЫЕ ФУНКЦИИ БОТА
+# =============================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start и главного меню"""
+    buttons = [
+        ["📨 Отправить заявку"],
+        ["❓ Частые вопросы", "📞 Контакты"],
+        ["ℹ️ О нас"],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
     
-    update.message.reply_text(
-        "👋 Добро пожаловать в бот для геодезических работ!\n"
-        "Выберите нужный вариант:",
+    await update.message.reply_html(
+        text=TEXTS["welcome"],
         reply_markup=reply_markup
     )
 
-def button_handler(update: Update, context: CallbackContext) -> None:
-    """Обработчик inline кнопок"""
-    query = update.callback_query
-    query.answer()
-
-    if query.data == 'send_request':
-        request_menu(update, context)
-    elif query.data == 'faq':
-        show_faq_menu(update, context)
-    elif query.data == 'contacts':
-        show_contacts(update, context)
-    elif query.data == 'about':
-        show_about(update, context)
-    elif query.data.startswith('faq_'):
-        show_faq_answer(update, context)
-
-def request_menu(update: Update, context: CallbackContext) -> None:
-    """Меню отправки заявки"""
-    keyboard = [
-        [
-            KeyboardButton("📍 Отправить геолокацию", request_location=True),
-            KeyboardButton("📝 Ввести адрес вручную")
-        ],
-        [KeyboardButton("📞 Отправить телефон", request_contact=True)],
-        [KeyboardButton("🔙 Назад")]
+async def handle_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Отправить заявку'"""
+    buttons = [
+        [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
+        ["🏠 Ввести адрес вручную"],
+        ["🔙 Назад"],
     ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
     
-    query = update.callback_query
-    if query:
-        query.edit_message_text(
-            text="📋 Для оформления заявки нам потребуется:\n"
-                 "1. Местоположение объекта (геолокация или адрес)\n"
-                 "2. Ваш контактный телефон\n\n"
-                 "Выберите действие:",
-            reply_markup=reply_markup
-        )
+    await update.message.reply_html(
+        text=TEXTS["request"],
+        reply_markup=reply_markup
+    )
+    return LOCATION
+
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик получения местоположения (геолокация или адрес)"""
+    if update.message.location:
+        # Если пользователь отправил геолокацию
+        lat = update.message.location.latitude
+        lon = update.message.location.longitude
+        context.user_data["location"] = f"Геолокация: {lat},{lon}"
+        logger.info(f"Получена геолокация: {lat},{lon}")
     else:
-        update.message.reply_text(
-            "📋 Для оформления заявки нам потребуется:\n"
-            "1. Местоположение объекта (геолокация или адрес)\n"
-            "2. Ваш контактный телефон\n\n"
-            "Выберите действие:",
-            reply_markup=reply_markup
-        )
+        # Если пользователь ввел адрес вручную
+        context.user_data["location"] = f"Адрес: {update.message.text}"
+        logger.info(f"Получен адрес: {update.message.text}")
     
-    return SEND_LOCATION
-
-def handle_location(update: Update, context: CallbackContext) -> None:
-    """Обработчик геолокации"""
-    location = update.message.location
-    context.user_data['location'] = f"{location.latitude},{location.longitude}"
+    # Предлагаем отправить телефон
+    buttons = [
+        [KeyboardButton("📱 Отправить телефон", request_contact=True)],
+        ["🔙 Назад"],
+    ]
+    reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
     
-    update.message.reply_text(
-        "✅ Геолокация получена! Теперь отправьте ваш телефон "
-        "или нажмите кнопку ниже.",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("📞 Отправить телефон", request_contact=True)]],
-            resize_keyboard=True
-        )
+    await update.message.reply_html(
+        text=TEXTS["location_received"],
+        reply_markup=reply_markup
     )
-    
-    return SEND_PHONE
+    return PHONE
 
-def handle_address(update: Update, context: CallbackContext) -> None:
-    """Обработчик ручного ввода адреса"""
-    address = update.message.text
-    context.user_data['address'] = address
-    
-    update.message.reply_text(
-        "✅ Адрес сохранен! Теперь отправьте ваш телефон "
-        "или нажмите кнопку ниже.",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("📞 Отправить телефон", request_contact=True)]],
-            resize_keyboard=True
-        )
-    )
-    
-    return SEND_PHONE
-
-def handle_phone(update: Update, context: CallbackContext) -> None:
-    """Обработчик телефона"""
+async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик получения телефона"""
     if update.message.contact:
+        # Если пользователь отправил контакт
         phone = update.message.contact.phone_number
+        logger.info(f"Получен контакт: {phone}")
     else:
+        # Если пользователь ввел телефон вручную
         phone = update.message.text
+        logger.info(f"Получен телефон: {phone}")
     
-    context.user_data['phone'] = phone
-    
-    # Получаем адрес/геолокацию
-    location = context.user_data.get('location', context.user_data.get('address', 'Не указано'))
-    
-    # Подготавливаем данные для Google Sheets
-    data = [
-        str(update.effective_user.id),
-        location,
-        phone,
-        datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S'),
-        "Новая"
-    ]
-    
+    # Сохраняем данные в Google Sheets
     try:
-        append_to_sheet(data)
-        update.message.reply_text(
-            "✅ Ваша заявка успешно отправлена!\n"
-            "Мы свяжемся с вами в ближайшее время.",
-            reply_markup=ReplyKeyboardRemove()
+        append_to_sheet(
+            address=context.user_data["location"],
+            phone=phone
         )
+        logger.info("Данные успешно сохранены в Google Sheets")
     except Exception as e:
-        logger.error(f"Error saving to Google Sheets: {e}")
-        update.message.reply_text(
-            "⚠️ Произошла ошибка при отправке заявки. Пожалуйста, попробуйте позже."
-        )
+        logger.error(f"Ошибка при сохранении в Google Sheets: {e}")
+        await update.message.reply_text("⚠️ Произошла ошибка при сохранении заявки. Пожалуйста, попробуйте позже.")
+        return ConversationHandler.END
     
-    # Возвращаемся в главное меню
-    start(update, context)
+    # Отправляем подтверждение
+    await update.message.reply_html(
+        text=TEXTS["phone_received"],
+        reply_markup=ReplyKeyboardMarkup([["🏠 Главное меню"]], resize_keyboard=True)
+    )
     return ConversationHandler.END
 
-def load_faq():
-    """Загрузка FAQ из файла с кэшированием"""
-    global faq_cache
-    if faq_cache is None:
-        try:
-            with open('data/faq.json', 'r', encoding='utf-8') as f:
-                faq_cache = json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading FAQ: {e}")
-            faq_cache = {}
-    return faq_cache
-
-def show_faq_menu(update: Update, context: CallbackContext) -> None:
-    """Показать меню FAQ"""
-    faq = load_faq()
-    keyboard = [
-        [InlineKeyboardButton(q, callback_data=f'faq_{i}')]
-        for i, q in enumerate(faq.keys())
-    ]
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back')])
-    
-    query = update.callback_query
-    if query:
-        query.edit_message_text(
-            text="❓ Выберите интересующий вопрос:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        update.message.reply_text(
-            text="❓ Выберите интересующий вопрос:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-def show_faq_answer(update: Update, context: CallbackContext) -> None:
-    """Показать ответ на вопрос FAQ"""
-    query = update.callback_query
-    faq_id = int(query.data.split('_')[1])
-    faq = load_faq()
-    
-    questions = list(faq.keys())
-    if 0 <= faq_id < len(questions):
-        question = questions[faq_id]
-        answer = faq[question]
-        
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='faq')]]
-        query.edit_message_text(
-            text=f"❓ <b>{question}</b>\n\n{answer}",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-def show_contacts(update: Update, context: CallbackContext) -> None:
-    """Показать контакты"""
-    contacts_text = (
-        "📌 <b>Наши контакты:</b>\n\n"
-        "📍 Адрес: г. Москва, ул. Геодезическая, д. 42\n"
-        "📞 Телефон: +7 (495) 123-45-67\n"
-        "📧 Email: geodetic@example.com\n\n"
-        "⏰ Часы работы: Пн-Пт с 9:00 до 18:00"
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена текущего действия и возврат в главное меню"""
+    logger.info("Действие отменено пользователем")
+    await update.message.reply_html(
+        text=TEXTS["cancel"],
+        reply_markup=ReplyKeyboardMarkup([["🏠 Главное меню"]], resize_keyboard=True)
     )
-    
-    query = update.callback_query
-    if query:
-        query.edit_message_text(
-            text=contacts_text,
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Назад", callback_data='back')]]
-            )
-        )
-    else:
-        update.message.reply_text(
-            text=contacts_text,
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Назад", callback_data='back')]]
-            )
-        )
-
-def show_about(update: Update, context: CallbackContext) -> None:
-    """Показать информацию о компании"""
-    about_text = (
-        "ℹ️ <b>О нашей компании:</b>\n\n"
-        "Мы занимаемся полным комплексом геодезических работ:\n"
-        "- Межевание земельных участков\n"
-        "- Кадастровые работы\n"
-        "- Топографическая съемка\n"
-        "- Вынос границ в натуру\n\n"
-        "Опыт работы более 10 лет!"
-    )
-    
-    query = update.callback_query
-    if query:
-        query.edit_message_text(
-            text=about_text,
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Назад", callback_data='back')]]
-            )
-        )
-    else:
-        update.message.reply_text(
-            text=about_text,
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 Назад", callback_data='back')]]
-            )
-        )
-
-def cancel(update: Update, context: CallbackContext) -> None:
-    """Отмена текущего действия"""
-    update.message.reply_text(
-        'Действие отменено.',
-        reply_markup=ReplyKeyboardRemove()
-    )
-    start(update, context)
     return ConversationHandler.END
 
-def error_handler(update: Update, context: CallbackContext) -> None:
-    """Обработчик ошибок"""
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
-    
+# =============================================
+# ЗАПУСК БОТА
+# =============================================
+
+def run_client_bot(token: str):
+    """Запуск клиентского бота"""
     try:
-        update.message.reply_text(
-            '⚠️ Произошла ошибка. Пожалуйста, попробуйте позже.'
+        logger.info("Запуск клиентского бота...")
+        
+        # Создаем приложение бота
+        application = ApplicationBuilder().token(token).build()
+        
+        # Настройка ConversationHandler для обработки заявок
+        conv_handler = ConversationHandler(
+            entry_points=[MessageHandler(filters.Regex("^📨 Отправить заявку$"), handle_request)],
+            states={
+                LOCATION: [
+                    MessageHandler(filters.LOCATION, handle_location),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location)
+                ],
+                PHONE: [
+                    MessageHandler(filters.CONTACT, handle_phone),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone)
+                ],
+            },
+            fallbacks=[MessageHandler(filters.Regex("^🔙 Назад$"), cancel)],
         )
-    except:
-        pass
-
-def main() -> None:
-    """Запуск бота"""
-    load_dotenv()
-    updater = Updater(os.getenv('CLIENT_BOT_TOKEN'))
-    
-    dp = updater.dispatcher
-    
-    # Обработчики команд
-    dp.add_handler(CommandHandler('start', start))
-    dp.add_handler(CommandHandler('cancel', cancel))
-    
-    # Обработчики кнопок
-    dp.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Обработчики сообщений
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(request_menu, pattern='^send_request$')],
-        states={
-            SEND_LOCATION: [
-                MessageHandler(Filters.location, handle_location),
-                MessageHandler(Filters.text & ~Filters.command, handle_address)
-            ],
-            SEND_PHONE: [
-                MessageHandler(Filters.contact | Filters.text & ~Filters.command, handle_phone)
-            ]
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
-    dp.add_handler(conv_handler)
-    
-    # Обработчик ошибок
-    dp.add_error_handler(error_handler)
-    
-    # Запуск бота
-    updater.start_polling()
-    updater.idle()
-
-if __name__ == '__main__':
-    main()
+        
+        # Регистрируем обработчики
+        application.add_handler(conv_handler)
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(MessageHandler(filters.Regex("^🏠 Главное меню$"), start))
+        
+        # Запускаем бота
+        application.run_polling()
+        logger.info("Бот успешно запущен")
+        
+    except Exception as e:
+        logger.critical(f"Ошибка при запуске бота: {e}")
+        raise
