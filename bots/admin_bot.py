@@ -1,42 +1,113 @@
 """
-Административный бот (версия python-telegram-bot v20.x)
-Функционал:
-- Уведомления о новых заявках
-- Управление статусами
-- Быстрый доступ к контактам
+🛠 АДМИНИСТРАТИВНЫЙ БОТ ДЛЯ УПРАВЛЕНИЯ ЗАЯВКАМИ
+
+▌ Основной функционал:
+├── 📊 Просмотр новых заявок
+├── ✏️ Изменение статусов
+├── 📞 Быстрый контакт с клиентом
+└── 📊 Статистика обработки
+
+▌ Особенности реализации:
+✔ Поддержка python-telegram-bot 20.x
+✔ Интеграция с Google Sheets
+✔ Логирование всех действий
+✔ Гибкая система команд
 """
 
 import logging
-from telegram import Update, ReplyKeyboardMarkup
+import pytz
+from datetime import datetime
+from typing import Dict, Any
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
+    MessageHandler,
     filters
 )
 from services.gsheets import get_worksheet
 
-# ==================== НАСТРОЙКА ====================
+# ====================
+# ⚙️ НАСТРОЙКИ СИСТЕМЫ
+# ====================
+
+# Логирование
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='🛠 [%(asctime)s] %(levelname)s - %(name)s: %(message)s',
     level=logging.INFO,
-    filename='admin_bot.log'
+    handlers=[
+        logging.FileHandler('admin_bot.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
-# Эмодзи для интерфейса
-EMOJI = {
-    'new': '🆕',
-    'call': '📞',
-    'work': '🔄',
-    'done': '✅',
-    'back': '🔙'
+# Временная зона
+MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+
+# ====================
+# 🗂 КОНСТАНТЫ И ТЕКСТЫ
+# ====================
+
+# Статусы заявок
+STATUSES = {
+    'new': '🆕 Новая',
+    'in_progress': '🔄 В работе',
+    'completed': '✅ Завершена'
 }
 
-# ==================== ОБРАБОТЧИКИ ====================
-async def check_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка новых заявок"""
+# Текстовые шаблоны
+TEXTS = {
+    'welcome': 
+        """
+        🛠 <b>АДМИНИСТРАТИВНАЯ ПАНЕЛЬ</b>
+
+        Выберите действие:
+        """,
+    
+    'request_details': 
+        """
+        📋 <b>ЗАЯВКА #{id}</b>
+        
+        📍 Адрес: {address}
+        📞 Телефон: {phone}
+        📅 Дата: {date}
+        🏷 Статус: {status}
+        """
+}
+
+# ====================
+# 🖥 ОСНОВНЫЕ ФУНКЦИИ
+# ====================
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает главное меню администратора"""
+    buttons = [
+        ["🆕 Новые заявки"],
+        ["📊 Статистика"],
+        ["⚙️ Настройки"]
+    ]
+    
+    await update.message.reply_text(
+        text=TEXTS['welcome'],
+        reply_markup=ReplyKeyboardMarkup(
+            buttons,
+            resize_keyboard=True,
+            input_field_placeholder="Выберите действие..."
+        ),
+        parse_mode='HTML'
+    )
+
+async def show_new_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отображает список новых заявок"""
     try:
         worksheet = get_worksheet()
         records = worksheet.get_all_records()
@@ -46,71 +117,85 @@ async def check_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📭 Нет новых заявок")
             return
         
-        for req in new_requests:
-            buttons = [
-                [f"{EMOJI['call']} Позвонить {req['Телефон']}"],
-                [f"{EMOJI['work']} В работе #{req['ID']}"],
-                [f"{EMOJI['done']} Завершено #{req['ID']}"]
+        for request in new_requests:
+            keyboard = [
+                [
+                    InlineKeyboardButton("📞 Позвонить", callback_data=f"call_{request['Телефон']}"),
+                    InlineKeyboardButton("🔄 В работу", callback_data=f"progress_{request['ID']}")
+                ],
+                [
+                    InlineKeyboardButton("✅ Завершить", callback_data=f"complete_{request['ID']}")
+                ]
             ]
             
-            text = (
-                f"{EMOJI['new']} <b>Новая заявка #{req['ID']}</b>\n\n"
-                f"📍 <b>Адрес:</b> {req['Адрес']}\n"
-                f"📞 <b>Телефон:</b> {req['Телефон']}\n"
-                f"📅 <b>Дата:</b> {req['Дата']}"
-            )
-            
             await update.message.reply_text(
-                text=text,
-                reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True),
+                text=TEXTS['request_details'].format(
+                    id=request['ID'],
+                    address=request['Адрес'],
+                    phone=request['Телефон'],
+                    date=request['Дата'],
+                    status=STATUSES['new']
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='HTML'
             )
             
     except Exception as e:
-        logger.error(f"Ошибка проверки заявок: {e}")
-        await update.message.reply_text("⚠️ Ошибка загрузки заявок")
+        logger.error(f"Ошибка при загрузке заявок: {e}")
+        await update.message.reply_text("⚠️ Ошибка загрузки данных")
 
-async def update_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обновление статуса заявки"""
+async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает нажатия inline-кнопок"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data.startswith('call_'):
+        phone = query.data.split('_')[1]
+        await query.edit_message_text(f"📞 Наберите номер: {phone}")
+        
+    elif query.data.startswith('progress_'):
+        request_id = query.data.split('_')[1]
+        await _update_request_status(request_id, 'in_progress', query)
+        
+    elif query.data.startswith('complete_'):
+        request_id = query.data.split('_')[1]
+        await _update_request_status(request_id, 'completed', query)
+
+async def _update_request_status(request_id: str, status: str, query):
+    """Обновляет статус заявки в таблице"""
     try:
-        text = update.message.text
-        req_id = text.split('#')[1]
-        new_status = 'В работе' if EMOJI['work'] in text else 'Завершено'
-        
         worksheet = get_worksheet()
-        cell = worksheet.find(req_id)
-        worksheet.update_cell(cell.row, 5, new_status)
+        cell = worksheet.find(request_id)
+        worksheet.update_cell(cell.row, 5, STATUSES[status])
         
-        await update.message.reply_text(
-            f"✅ Статус заявки #{req_id} изменен на '{new_status}'"
+        await query.edit_message_text(
+            text=f"🔄 Статус заявки #{request_id} изменен на '{STATUSES[status]}'"
         )
+        logger.info(f"Обновлен статус заявки #{request_id}")
         
     except Exception as e:
         logger.error(f"Ошибка обновления статуса: {e}")
-        await update.message.reply_text("⚠️ Ошибка обновления статуса")
+        await query.edit_message_text("⚠️ Ошибка обновления статуса")
 
-# ==================== ЗАПУСК БОТА ====================
+# ====================
+# 🚀 ЗАПУСК БОТА
+# ====================
+
 def run_admin_bot(token: str):
-    """Запуск административного бота"""
+    """Запускает административного бота"""
     try:
-        logger.info("Инициализация админского бота...")
+        logger.info("🔄 Инициализация админского бота...")
         
         application = Application.builder().token(token).build()
         
         # Регистрация обработчиков
-        application.add_handler(CommandHandler("start", check_requests))
-        application.add_handler(
-            MessageHandler(filters.Regex(f"^{EMOJI['call']}"), 
-                         lambda u, c: u.message.reply_text(f"Наберите: {u.message.text.split()[-1]}"))
-        )
-        application.add_handler(
-            MessageHandler(filters.Regex(f"^({EMOJI['work']}|{EMOJI['done']})"), 
-                         update_status)
-        )
+        application.add_handler(CommandHandler("start", show_main_menu))
+        application.add_handler(MessageHandler(filters.Regex("^🆕 Новые заявки$"), show_new_requests))
+        application.add_handler(CallbackQueryHandler(handle_button_click))
         
-        logger.info("Админский бот запущен")
+        logger.info("🤖 Админский бот запущен и готов к работе")
         application.run_polling()
         
     except Exception as e:
-        logger.critical(f"Ошибка запуска админского бота: {e}")
+        logger.critical(f"💥 Критическая ошибка: {e}")
         raise

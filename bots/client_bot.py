@@ -1,16 +1,25 @@
 """
-📋 КЛИЕНТСКИЙ БОТ ДЛЯ ГЕОДЕЗИЧЕСКИХ УСЛУГ (v2.1)
+🤖 КЛИЕНТСКИЙ БОТ ДЛЯ ГЕОДЕЗИЧЕСКИХ УСЛУГ
 
-Основные функции:
-✅ Прием заявок с геолокацией/адресом
-✅ Сбор контактных данных
-✅ Интеграция с Google Sheets
-✅ Красивый интерфейс с emoji
+▌ Функционал:
+├── Прием заявок с геолокацией
+├── Сбор контактных данных
+├── Интеграция с Google Sheets
+└── Красивый интерфейс с меню
+
+▌ Особенности реализации:
+✔ Поддержка python-telegram-bot 20.x
+✔ Обработка ошибок кодировки
+✔ Настройка временных зон
 """
 
+import io
+import sys
 import logging
 import pytz
 from datetime import datetime
+from typing import Dict, Any
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -25,31 +34,43 @@ from telegram.ext import (
     ConversationHandler,
     filters
 )
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from services.gsheets import append_to_sheet
 
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
-# ⚙️ Н А С Т Р О Й К И
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+# ====================
+# 🔧 НАСТРОЙКИ СИСТЕМЫ
+# ====================
 
-# 🕒 Настройка временной зоны
+# Кодировка для Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
+# Временная зона
 TIMEZONE = pytz.timezone('Europe/Moscow')
 
-# 📊 Уровни логирования
+# Логирование
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='▌ %(asctime)s │ %(levelname)-8s │ %(name)s │ %(message)s',
     level=logging.INFO,
-    filename='client_bot.log'
+    handlers=[
+        logging.FileHandler('client_bot.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
-# 📌 Состояния диалога
+# ====================
+# 🗂 СОСТОЯНИЯ БОТА
+# ====================
 (
     MAIN_MENU,
     GET_LOCATION,
     GET_PHONE
 ) = range(3)
 
-# 🔠 Текстовые шаблоны с emoji
+# ====================
+# 📝 ТЕКСТОВЫЕ ШАБЛОНЫ
+# ====================
 TEXTS = {
     'welcome': 
         """
@@ -63,43 +84,25 @@ TEXTS = {
         📍 <b>НОВАЯ ЗАЯВКА</b>
         
         Укажите местоположение объекта:
-        """,
-    
-    'location_received':
-        """
-        ✅ <b>МЕСТОПОЛОЖЕНИЕ ПРИНЯТО</b>
-        
-        Теперь укажите ваш телефон:
-        """,
-    
-    'success':
-        """
-        ✨ <b>ЗАЯВКА ПРИНЯТА!</b>
-        
-        Наш специалист свяжется с вами 
-        в течение 24 часов.
         """
 }
 
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
-# 🖥 О С Н О В Н О Й   И Н Т Е Р Ф Е Й С
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
+# ====================
+# 🖥 ОСНОВНЫЕ ФУНКЦИИ
+# ====================
 
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    🏠 Главное меню
-    Показывает основные кнопки интерфейса
-    """
-    menu_buttons = [
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает главное меню"""
+    buttons = [
         ["📨 Отправить заявку"],
-        ["❓ Частые вопросы", "📞 Контакты"],
-        ["ℹ️ О компании"]
+        ["❓ Вопросы", "📞 Контакты"],
+        ["ℹ️ О нас"]
     ]
     
     await update.message.reply_text(
         text=TEXTS['welcome'],
         reply_markup=ReplyKeyboardMarkup(
-            menu_buttons, 
+            buttons,
             resize_keyboard=True,
             input_field_placeholder="Выберите действие..."
         ),
@@ -107,165 +110,53 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return MAIN_MENU
 
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
-# 📝 О Б Р А Б О Т Ч И К И   З А Я В О К
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
-
-async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    📨 Начало оформления заявки
-    Предлагает выбрать способ указания местоположения
-    """
-    location_buttons = [
-        [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
-        ["🏠 Указать адрес"],
-        ["🔙 Назад"]
-    ]
-    
-    await update.message.reply_text(
-        text=TEXTS['request'],
-        reply_markup=ReplyKeyboardMarkup(
-            location_buttons,
-            resize_keyboard=True
-        ),
-        parse_mode='HTML'
-    )
-    return GET_LOCATION
-
-async def process_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    📍 Обработка местоположения
-    Сохраняет геолокацию или адрес и запрашивает телефон
-    """
-    if update.message.location:
-        # 🌐 Обработка геолокации
-        loc = update.message.location
-        context.user_data['location'] = {
-            'type': 'geo',
-            'lat': loc.latitude,
-            'lon': loc.longitude
-        }
-        logger.info(f"Получена геолокация: {loc.latitude},{loc.longitude}")
-    else:
-        # 🏠 Обработка адреса
-        context.user_data['location'] = {
-            'type': 'address',
-            'text': update.message.text
-        }
-        logger.info(f"Получен адрес: {update.message.text}")
-
-    # 📱 Запрос телефона
-    phone_buttons = [
-        [KeyboardButton("📱 Отправить телефон", request_contact=True)],
-        ["🔙 Назад"]
-    ]
-    
-    await update.message.reply_text(
-        text=TEXTS['location_received'],
-        reply_markup=ReplyKeyboardMarkup(
-            phone_buttons,
-            resize_keyboard=True
-        ),
-        parse_mode='HTML'
-    )
-    return GET_PHONE
-
-async def process_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    📞 Обработка телефона
-    Сохраняет заявку и завершает процесс
-    """
-    # Получаем телефон
-    phone = update.message.contact.phone_number if update.message.contact else update.message.text
-    
+async def setup_timezone(app: Application) -> None:
+    """Настраивает временную зону для планировщика"""
     try:
-        # 📊 Сохранение в Google Sheets
-        location = context.user_data['location']
-        address = (
-            f"{location['lat']},{location['lon']}" 
-            if location['type'] == 'geo' 
-            else location['text']
-        )
-        
-        append_to_sheet(
-            address=address,
-            phone=phone
-        )
-        
-        logger.info("✅ Заявка сохранена")
-        
-        # 🎉 Подтверждение пользователю
-        await update.message.reply_text(
-            text=TEXTS['success'],
-            reply_markup=ReplyKeyboardRemove(),
-            parse_mode='HTML'
-        )
-        
+        app.job_queue.scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+        logger.info(f"Установлена временная зона: {TIMEZONE}")
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения: {e}")
-        await update.message.reply_text(
-            "⚠️ Произошла ошибка. Пожалуйста, попробуйте позже.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    
-    return await show_main_menu(update, context)
-
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
-# 🚀 З А П У С К   Б О Т А
-# 〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️
-
-def run_client_bot(token: str):
-    """
-    🔌 Основная функция запуска бота
-    Настраивает и запускает Telegram-бота
-    """
-    try:
-        logger.info("🔄 Инициализация бота...")
-        
-        # Создаем Application
-        app = Application.builder() \
-            .token(token) \
-            .post_init(_setup_timezone) \
-            .build()
-        
-        # Настраиваем обработчики
-        _setup_handlers(app)
-        
-        logger.info("🤖 Бот запущен и готов к работе!")
-        app.run_polling()
-        
-    except Exception as e:
-        logger.critical(f"💥 Критическая ошибка: {e}")
+        logger.error(f"Ошибка настройки временной зоны: {e}")
         raise
 
-async def _setup_timezone(app: Application):
-    """⏰ Установка временной зоны"""
-    app.job_queue.scheduler.configure(timezone=TIMEZONE)
-    logger.info(f"⏱ Установлена временная зона: {TIMEZONE}")
+# ====================
+# 🚀 ЗАПУСК БОТА
+# ====================
 
-def _setup_handlers(app: Application):
-    """🛠 Настройка обработчиков команд"""
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", show_main_menu),
-            MessageHandler(filters.Regex("^📨 Отправить заявку$"), start_request)
-        ],
-        states={
-            MAIN_MENU: [
-                MessageHandler(filters.Regex("^📨 Отправить заявку$"), start_request)
-            ],
-            GET_LOCATION: [
-                MessageHandler(filters.LOCATION, process_location),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_location)
-            ],
-            GET_PHONE: [
-                MessageHandler(filters.CONTACT, process_phone),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_phone)
-            ]
-        },
-        fallbacks=[
-            MessageHandler(filters.Regex("^🔙 Назад$"), show_main_menu)
-        ],
-    )
-    
-    app.add_handler(conv_handler)
+def run_client_bot(token: str) -> None:
+    """Основная функция запуска бота"""
+    try:
+        logger.info("Инициализация клиентского бота...")
+        
+        application = Application.builder() \
+            .token(token) \
+            .post_init(setup_timezone) \
+            .build()
+        
+        # Настройка обработчиков
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler("start", start)],
+            states={
+                MAIN_MENU: [
+                    MessageHandler(filters.Regex("^📨 Отправить заявку$"), start_request)
+                ],
+                GET_LOCATION: [
+                    MessageHandler(filters.LOCATION, process_location),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_location)
+                ],
+                GET_PHONE: [
+                    MessageHandler(filters.CONTACT, process_phone),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_phone)
+                ]
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        
+        application.add_handler(conv_handler)
+        application.run_polling()
+        
+        logger.info("Бот успешно запущен")
+        
+    except Exception as e:
+        logger.critical(f"Ошибка запуска бота: {e}")
+        raise
