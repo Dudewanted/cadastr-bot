@@ -1,130 +1,116 @@
 """
-Telegram бот для администратора кадастровых услуг.
-Основные функции:
+Административный бот (версия python-telegram-bot v20.x)
+Функционал:
 - Уведомления о новых заявках
-- Быстрый набор телефона клиента
-- Изменение статуса заявки
+- Управление статусами
+- Быстрый доступ к контактам
 """
 
 import logging
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
+    Application,
     CommandHandler,
     MessageHandler,
-    filters,
+    ContextTypes,
+    filters
 )
 from services.gsheets import get_worksheet
 
-# Настройка логирования
+# ==================== НАСТРОЙКА ====================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    filename="admin_bot.log"
+    filename='admin_bot.log'
 )
 logger = logging.getLogger(__name__)
 
-# =============================================
-# ТЕКСТОВЫЕ ШАБЛОНЫ
-# =============================================
-
-TEXTS = {
-    "new_request": "🚨 <b>Новая заявка #{id}</b>\n\n"
-                   "📍 <b>Адрес:</b> {address}\n"
-                   "📞 <b>Телефон:</b> {phone}\n"
-                   "📅 <b>Дата:</b> {date}\n\n"
-                   "Выберите действие:",
-    "no_requests": "📭 Новых заявок нет.",
-    "call": "Наберите номер: {phone}",
-    "status_changed": "✅ Статус заявки #{id} изменен на '{status}'"
+# Эмодзи для интерфейса
+EMOJI = {
+    'new': '🆕',
+    'call': '📞',
+    'work': '🔄',
+    'done': '✅',
+    'back': '🔙'
 }
 
-# =============================================
-# ОСНОВНЫЕ ФУНКЦИИ БОТА
-# =============================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start - проверяет новые заявки"""
+# ==================== ОБРАБОТЧИКИ ====================
+async def check_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка новых заявок"""
     try:
         worksheet = get_worksheet()
         records = worksheet.get_all_records()
-        new_requests = [r for r in records if r["Статус"] == "Новая"]
+        new_requests = [r for r in records if r['Статус'] == 'Новая']
         
         if not new_requests:
-            await update.message.reply_html(TEXTS["no_requests"])
+            await update.message.reply_text("📭 Нет новых заявок")
             return
         
-        for request in new_requests:
-            message = TEXTS["new_request"].format(
-                id=request["ID"],
-                address=request["Адрес"],
-                phone=request["Телефон"],
-                date=request["Дата"]
+        for req in new_requests:
+            buttons = [
+                [f"{EMOJI['call']} Позвонить {req['Телефон']}"],
+                [f"{EMOJI['work']} В работе #{req['ID']}"],
+                [f"{EMOJI['done']} Завершено #{req['ID']}"]
+            ]
+            
+            text = (
+                f"{EMOJI['new']} <b>Новая заявка #{req['ID']}</b>\n\n"
+                f"📍 <b>Адрес:</b> {req['Адрес']}\n"
+                f"📞 <b>Телефон:</b> {req['Телефон']}\n"
+                f"📅 <b>Дата:</b> {req['Дата']}"
             )
             
-            buttons = [
-                [f"📞 Позвонить {request['Телефон']}"],
-                [f"🔄 В работе #{request['ID']}"],
-                [f"✅ Завершено #{request['ID']}"]
-            ]
-            reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-            
-            await update.message.reply_html(
-                text=message,
-                reply_markup=reply_markup
+            await update.message.reply_text(
+                text=text,
+                reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True),
+                parse_mode='HTML'
             )
             
     except Exception as e:
-        logger.error(f"Ошибка при проверке заявок: {e}")
-        await update.message.reply_text("⚠️ Произошла ошибка при загрузке заявок")
+        logger.error(f"Ошибка проверки заявок: {e}")
+        await update.message.reply_text("⚠️ Ошибка загрузки заявок")
 
-async def handle_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик кнопки звонка"""
-    phone = update.message.text.replace("📞 Позвонить ", "")
-    await update.message.reply_text(
-        TEXTS["call"].format(phone=phone)
-    )
-
-async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик изменения статуса заявки"""
+async def update_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обновление статуса заявки"""
     try:
         text = update.message.text
-        request_id = text.split("#")[1]
-        status = "В работе" if "🔄" in text else "Завершено"
+        req_id = text.split('#')[1]
+        new_status = 'В работе' if EMOJI['work'] in text else 'Завершено'
         
         worksheet = get_worksheet()
-        cell = worksheet.find(request_id)
-        worksheet.update_cell(cell.row, 5, status)
+        cell = worksheet.find(req_id)
+        worksheet.update_cell(cell.row, 5, new_status)
         
-        await update.message.reply_html(
-            TEXTS["status_changed"].format(id=request_id, status=status)
+        await update.message.reply_text(
+            f"✅ Статус заявки #{req_id} изменен на '{new_status}'"
         )
         
     except Exception as e:
-        logger.error(f"Ошибка при изменении статуса: {e}")
-        await update.message.reply_text("⚠️ Произошла ошибка при изменении статуса")
+        logger.error(f"Ошибка обновления статуса: {e}")
+        await update.message.reply_text("⚠️ Ошибка обновления статуса")
 
-# =============================================
-# ЗАПУСК БОТА
-# =============================================
-
+# ==================== ЗАПУСК БОТА ====================
 def run_admin_bot(token: str):
-    """Запуск админского бота"""
+    """Запуск административного бота"""
     try:
-        logger.info("Запуск админского бота...")
+        logger.info("Инициализация админского бота...")
         
-        application = ApplicationBuilder().token(token).build()
+        application = Application.builder().token(token).build()
         
-        # Регистрируем обработчики
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(MessageHandler(filters.Regex("^📞 Позвонить"), handle_call))
-        application.add_handler(MessageHandler(filters.Regex("^(🔄|✅)"), handle_status))
+        # Регистрация обработчиков
+        application.add_handler(CommandHandler("start", check_requests))
+        application.add_handler(
+            MessageHandler(filters.Regex(f"^{EMOJI['call']}"), 
+                         lambda u, c: u.message.reply_text(f"Наберите: {u.message.text.split()[-1]}"))
+        )
+        application.add_handler(
+            MessageHandler(filters.Regex(f"^({EMOJI['work']}|{EMOJI['done']})"), 
+                         update_status)
+        )
         
-        # Запускаем бота
+        logger.info("Админский бот запущен")
         application.run_polling()
-        logger.info("Админский бот успешно запущен")
         
     except Exception as e:
-        logger.critical(f"Ошибка при запуске админского бота: {e}")
+        logger.critical(f"Ошибка запуска админского бота: {e}")
         raise

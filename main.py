@@ -1,34 +1,31 @@
-from bots.client_bot import ClientBot
-from bots.admin_bot import AdminBot
-import threading
-from services.logger import logger
+"""
+Главный модуль для запуска ботов
+"""
 
-def run_client_bot():
-    """Запускает бота для клиентов"""
+import os
+import asyncio
+from dotenv import load_dotenv
+from bots.client_bot import run_client_bot
+from bots.admin_bot import run_admin_bot
+
+# Загрузка переменных окружения
+load_dotenv()
+
+async def main():
+    """Запуск ботов в асинхронном режиме"""
+    client_task = asyncio.create_task(
+        run_client_bot(os.getenv("CLIENT_BOT_TOKEN"))
+    )
+    admin_task = asyncio.create_task(
+        run_admin_bot(os.getenv("ADMIN_BOT_TOKEN"))
+    )
+    
+    await asyncio.gather(client_task, admin_task)
+
+if __name__ == "__main__":
     try:
-        client_bot = ClientBot()
-        client_bot.run()
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Боты остановлены")
     except Exception as e:
-        logger.error(f"Ошибка в клиентском боте: {e}")
-
-def run_admin_bot():
-    """Запускает бота для администратора"""
-    try:
-        admin_bot = AdminBot()
-        admin_bot.run()
-    except Exception as e:
-        logger.error(f"Ошибка в админском боте: {e}")
-
-if __name__ == '__main__':
-    logger.info("Запуск системы ботов")
-    
-    # Запускаем оба бота в разных потоках
-    client_thread = threading.Thread(target=run_client_bot)
-    admin_thread = threading.Thread(target=run_admin_bot)
-    
-    client_thread.start()
-    admin_thread.start()
-    
-    # Ожидаем завершения потоков (хотя они должны работать бесконечно)
-    client_thread.join()
-    admin_thread.join()
+        print(f"Ошибка: {e}")
