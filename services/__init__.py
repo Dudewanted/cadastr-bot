@@ -1,21 +1,32 @@
 """
-Пакет services содержит вспомогательные сервисы:
-- gsheets.py - работа с Google Sheets API
-- utils.py - валидация и утилиты
-- logger.py - система логирования
+Инициализационный модуль пакета services
 
-При инициализации создается экземпляр логгера для всего пакета.
+Экспортирует основные компоненты для работы с:
+- Google Sheets API
+- Другими сервисами (при добавлении)
+
+Содержит:
+- GoogleSheetsService - основной класс для работы с таблицами
+- append_to_sheet - функция быстрой записи в таблицу
+- get_worksheet - функция получения листа таблицы
 """
 
+from .gsheets import (
+    GoogleSheetsService,  # Основной сервисный класс
+    append_to_sheet,      # Упрощенный интерфейс для добавления данных
+    get_worksheet         # Упрощенный интерфейс для получения листа
+)
+
+# Определяем публичный API модуля
+__all__ = [
+    'GoogleSheetsService',
+    'append_to_sheet', 
+    'get_worksheet'
+]
+
+# Инициализация логгера
 import logging
-from .logger import logger as package_logger
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-# Реэкспорт основных классов для удобного импорта
-from .gsheets import GoogleSheetsService  # noqa
-from .utils import Validator              # noqa
-from .logger import BotLogger             # noqa
-
-__all__ = ['GoogleSheetsService', 'Validator', 'BotLogger', 'package_logger']
-
-# Инициализация логгера пакета
-package_logger.info(f"Инициализирован пакет services")
+# Версия пакета
+__version__ = '1.0.0'
