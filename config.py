@@ -13,7 +13,7 @@ class Config:
     
     # Настройки Google Sheets
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')      # ID таблицы Google Sheets
-    SERVICE_ACCOUNT_FILE = 'D:/programming/cadastr-bot/secure/cadastr-bots/client_secret.json'  # Путь к файлу сервисного аккаунта
+    SERVICE_ACCOUNT_FILE = '/secure/client_secret.json'  # Путь к файлу сервисного аккаунта
     SHEET_RANGE = 'Кадастровые заявки!A:E'            # Диапазон данных в таблице
     
     # Настройки логирования
