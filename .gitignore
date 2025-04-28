@@ -1,0 +1,101 @@
+# ========================
+# Конфиденциальные данные
+# ========================
+
+# Google API credentials
+/secure/
+*.json
+*.p12
+*.key
+*.cer
+service_account.json
+client_secret*.json
+client_secret.json
+
+# Файлы окружения
+.env
+*.env
+.env.local
+.env*.local
+
+# Telegram bot tokens
+#/config.py
+#/config_*.py
+
+# ========================
+# Системные файлы
+# ========================
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Кэши и логи
+*.log
+*.log.*
+logs/
+*.sqlite
+*.db
+*.cache
+
+# IDE и редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+.DS_Store
+*.komodoproject
+*.kdev4
+
+# Операционные системы
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ========================
+# Специфичные для проекта
+# ========================
+
+# Google Apps Script
+appsscript.json
+
+# Временные файлы
+temp/
+tmp/
+*.tmp
+*.bak
+*.backup
+
+# Документация
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
+
+# ========================
+# Тестовые данные
+# ========================
+/test_data/
+/examples/with_secrets/
+/dump/
