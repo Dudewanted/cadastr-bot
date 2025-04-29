@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 
 class GoogleSheetsService:
     """Сервис для работы с Google Sheets"""
-    
+
     def __init__(self, creds_path: str, spreadsheet_name: str):
         """
         Инициализация сервиса
-        
+
         Args:
             creds_path (str): Путь к файлу учетных данных
             spreadsheet_name (str): Название таблицы
@@ -37,79 +37,45 @@ class GoogleSheetsService:
         try:
             scope = [
                 "https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive.file",
                 "https://www.googleapis.com/auth/drive"
             ]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(
-                str(self.creds_path), scope
-            )
+            creds = ServiceAccountCredentials.from_json_keyfile_name(str(self.creds_path), scope)
             client = gspread.authorize(creds)
-            spreadsheet = client.open(self.spreadsheet_name)
-            self.worksheet = spreadsheet.sheet1
-            logger.info("Успешная авторизация в Google Sheets")
+            sheet = client.open(self.spreadsheet_name)
+            self.worksheet = sheet.get_worksheet(0)
+            logger.info("Авторизация прошла успешно")
         except Exception as e:
-            logger.error(f"Ошибка авторизации: {e}")
-            raise
+            logger.exception("Ошибка авторизации")
 
-    def append_request(self, address: str, phone: str) -> bool:
-        """
-        Добавление новой заявки
-        
-        Args:
-            address (str): Адрес или координаты
-            phone (str): Номер телефона
-            
-        Returns:
-            bool: True если успешно
-        """
+    def append_row(self, data: list):
+        """Добавление строки в таблицу"""
         try:
-            next_row = len(self.worksheet.get_all_values()) + 1
-            row_data = [
-                next_row,  # ID
-                address,
-                phone,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Новая"  # Статус
-            ]
-            self.worksheet.append_row(row_data)
-            logger.info(f"Добавлена заявка ID {next_row}")
-            return True
+            self.worksheet.append_row(data, value_input_option="USER_ENTERED")
+            logger.info("Строка добавлена в таблицу")
         except Exception as e:
-            logger.error(f"Ошибка добавления заявки: {e}")
-            return False
+            logger.exception("Ошибка при добавлении строки")
 
-    def update_status(self, request_id: int, status: str) -> bool:
-        """
-        Обновление статуса заявки
-        
-        Args:
-            request_id (int): ID заявки
-            status (str): Новый статус
-            
-        Returns:
-            bool: True если успешно
-        """
+    def update_status(self, row_id: str, status: str):
+        """Обновление колонки 'Статус' (5-я колонка)"""
         try:
-            cell = self.worksheet.find(str(request_id))
-            self.worksheet.update_cell(cell.row, 5, status)
-            logger.info(f"Обновлен статус заявки {request_id} на '{status}'")
-            return True
+            row_index = int(row_id)
+            self.worksheet.update_cell(row_index, 5, status)
+            logger.info(f"Статус строки {row_id} обновлён на {status}")
         except Exception as e:
-            logger.error(f"Ошибка обновления статуса: {e}")
-            return False
+            logger.exception("Ошибка при обновлении статуса")
 
-# Функции для обратной совместимости
-def append_to_sheet(address: str, phone: str):
-    """Упрощенный интерфейс для добавления заявки"""
-    service = GoogleSheetsService(
-        creds_path="D:/programming/cadastr-bot/secure/client_secret.json",
-        spreadsheet_name="Кадастровые заявки"
-    )
-    return service.append_request(address, phone)
 
-def get_worksheet():
-    """Упрощенный интерфейс для получения листа"""
-    service = GoogleSheetsService(
-        creds_path="D:/programming/cadastr-bot/secure/client_secret.json",
-        spreadsheet_name="Кадастровые заявки"
-    )
-    return service.worksheet
+# 🎯 Экземпляр для использования
+creds_file_path = "D:/programming/cadastr-bot/secure/cadastr-bots/client_secret.json"
+spreadsheet_name = "Кадастровые заявки"
+
+gs_service = GoogleSheetsService(creds_file_path, spreadsheet_name)
+
+# ✏️ Утилиты
+def append_to_sheet(data: list):
+    gs_service.append_row(data)
+
+def update_status(row_id: str, status: str):
+    gs_service.update_status(row_id, status)

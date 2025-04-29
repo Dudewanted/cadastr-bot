@@ -13,7 +13,7 @@ client_secret*.json
 client_secret.json
 
 # Файлы окружения
-/venv/
+/.venv/
 .env
 *.env
 .env.local

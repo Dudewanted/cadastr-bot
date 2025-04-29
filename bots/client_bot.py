@@ -1,280 +1,158 @@
 """
 🤖 КЛИЕНТСКИЙ БОТ ДЛЯ ГЕОДЕЗИЧЕСКИХ УСЛУГ
 
-▌ Основной функционал:
-├── 📍 Прием геолокации/адреса
-├── 📞 Сбор контактных данных
-├── 📊 Интеграция с Google Sheets
-└── 🎨 Удобный интерфейс с меню
+▌ Функционал:
+- Главное меню: Заявка, Частые вопросы, Контакты, О нас
+- Заявка: пошаговый ввод геолокации или адреса → телефона
+- Интеграция с Google Sheets (append_to_sheet)
 
-▌ Особенности реализации:
-✔ Поддержка python-telegram-bot 20.x
-✔ Корректная работа с временными зонами
-✔ Подробное логирование операций
-✔ Обработка ошибок ввода-вывода
 """
 
 import logging
-import pytz
 from datetime import datetime
+import pytz
 from typing import Dict, Any
 
 from telegram import (
     Update,
-    ReplyKeyboardMarkup,
     KeyboardButton,
-    ReplyKeyboardRemove
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    ContextTypes,
     ConversationHandler,
+    ContextTypes,
     filters,
-    JobQueue
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
 from services.gsheets import append_to_sheet
 
-# ====================
-# ⚙️ НАСТРОЙКИ СИСТЕМЫ
-# ====================
+# 📌 Константы состояний диалога
+CHOOSING, LOCATION, PHONE = range(3)
 
-# Временная зона (явно указываем pytz для совместимости)
-TIMEZONE = pytz.timezone('Europe/Moscow')
+# ⏰ Временная зона
+TIMEZONE = pytz.timezone("Europe/Moscow")
 
-# Настройка логирования
-logging.basicConfig(
-    format='▌ %(asctime)s │ %(name)-15s │ %(levelname)-8s │ %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler('client_bot.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# 🤖 Главное меню
+main_keyboard = ReplyKeyboardMarkup([
+    ["📨 Отправить заявку"],
+    ["❓ Частые вопросы", "📞 Контакты", "ℹ️ О нас"]
+], resize_keyboard=True)
 
-# ====================
-# 🗂 СОСТОЯНИЯ ДИАЛОГА
-# ====================
-
-(
-    MAIN_MENU,      # Главное меню
-    GET_LOCATION,   # Получение местоположения
-    GET_PHONE       # Получение телефона
-) = range(3)
-
-# ====================
-# 📝 ТЕКСТОВЫЕ ШАБЛОНЫ
-# ====================
-
-TEXTS = {
-    'welcome': 
-        """
-        🏠 <b>ГЕОДЕЗИЧЕСКИЕ УСЛУГИ</b>
-
-        Добро пожаловать! Чем могу помочь?
-        """,
-    
-    'request': 
-        """
-        📍 <b>НОВАЯ ЗАЯВКА</b>
-        
-        Укажите местоположение объекта:
-        """,
-    
-    'location_received':
-        """
-        ✅ <b>МЕСТОПОЛОЖЕНИЕ ПРИНЯТО</b>
-        
-        Теперь укажите ваш телефон:
-        """,
-    
-    'success':
-        """
-        ✨ <b>ЗАЯВКА ПРИНЯТА!</b>
-        
-        Наш специалист свяжется с вами 
-        в течение 24 часов.
-        """
-}
-
-# ====================
-# 🖥 ОСНОВНЫЕ ОБРАБОТЧИКИ
-# ====================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработчик команды /start - показывает главное меню"""
-    buttons = [
-        ["📨 Отправить заявку"],
-        ["❓ Вопросы", "📞 Контакты"],
-        ["ℹ️ О компании"]
-    ]
-    
+# 🚀 Старт
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        text=TEXTS['welcome'],
-        reply_markup=ReplyKeyboardMarkup(
-            buttons,
-            resize_keyboard=True,
-            input_field_placeholder="Выберите действие..."
-        ),
-        parse_mode='HTML'
+        "Здравствуйте! Я бот для подачи заявок на геодезические услуги.\n\n"
+        "Выберите нужный пункт в меню:",
+        reply_markup=main_keyboard
     )
-    return MAIN_MENU
+    return CHOOSING
 
-async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает процесс оформления новой заявки"""
-    buttons = [
+# 📨 Отправка заявки: выбор геолокации или адреса
+async def send_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
         [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
-        ["🏠 Указать адрес"],
-        ["🔙 Назад"]
+        [KeyboardButton("🏠 Ввести адрес вручную")]
     ]
-    
     await update.message.reply_text(
-        text=TEXTS['request'],
-        reply_markup=ReplyKeyboardMarkup(
-            buttons,
-            resize_keyboard=True
-        ),
-        parse_mode='HTML'
+        "Пожалуйста, отправьте адрес объекта или поделитесь геолокацией:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     )
-    return GET_LOCATION
+    return LOCATION
 
-async def process_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает получение местоположения"""
-    try:
-        if update.message.location:
-            # Геолокация
-            loc = update.message.location
-            context.user_data['location'] = {
-                'type': 'geo',
-                'lat': loc.latitude,
-                'lon': loc.longitude
-            }
-            logger.info(f"Получена геолокация: {loc.latitude},{loc.longitude}")
-        else:
-            # Текстовый адрес
-            context.user_data['location'] = {
-                'type': 'address',
-                'text': update.message.text
-            }
-            logger.info(f"Получен адрес: {update.message.text}")
-
-        # Запрос телефона
-        phone_buttons = [
-            [KeyboardButton("📱 Отправить телефон", request_contact=True)],
-            ["🔙 Назад"]
-        ]
-        
-        await update.message.reply_text(
-            text=TEXTS['location_received'],
-            reply_markup=ReplyKeyboardMarkup(
-                phone_buttons,
-                resize_keyboard=True
-            ),
-            parse_mode='HTML'
-        )
-        return GET_PHONE
-
-    except Exception as e:
-        logger.error(f"Ошибка обработки местоположения: {e}")
-        await update.message.reply_text("⚠️ Ошибка обработки данных")
-        return await start(update, context)
-
-async def process_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает получение телефона"""
-    try:
-        # Получаем телефон
-        phone = update.message.contact.phone_number if update.message.contact else update.message.text
-        
-        # Формируем адрес
-        location = context.user_data['location']
-        address = f"{location['lat']},{location['lon']}" if location['type'] == 'geo' else location['text']
-        
-        # Сохраняем в Google Sheets
-        append_to_sheet(
-            address=address,
-            phone=phone
-        )
-        
-        logger.info(f"Заявка сохранена: {address}, {phone}")
-        
-        # Подтверждение пользователю
-        await update.message.reply_text(
-            text=TEXTS['success'],
-            reply_markup=ReplyKeyboardRemove(),
-            parse_mode='HTML'
-        )
-        
-        return await start(update, context)
-
-    except Exception as e:
-        logger.error(f"Ошибка сохранения заявки: {e}")
-        await update.message.reply_text(
-            "⚠️ Произошла ошибка. Пожалуйста, попробуйте позже.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return await start(update, context)
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отменяет текущее действие"""
+# 📍 Обработка геолокации
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.location:
+        lat = update.message.location.latitude
+        lon = update.message.location.longitude
+        context.user_data["address"] = f"Геолокация: {lat}, {lon}"
+    else:
+        context.user_data["address"] = update.message.text.strip()
     await update.message.reply_text(
-        "Действие отменено",
+        "Теперь отправьте ваш номер телефона:",
         reply_markup=ReplyKeyboardRemove()
     )
-    return await start(update, context)
+    return PHONE
 
-# ====================
-# 🚀 ЗАПУСК БОТА
-# ====================
+# ☎️ Обработка телефона и отправка заявки
+async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip()
+    context.user_data["phone"] = phone
+    address = context.user_data.get("address", "Не указано")
 
-def run_client_bot(token: str) -> None:
-    """Основная функция запуска клиентского бота"""
-    try:
-        logger.info("Инициализация клиентского бота...")
-        
-        # Создаем Application с явным указанием временной зоны
-        application = (
-            Application.builder()
-            .token(token)
-            .job_queue(
-                job_queue=JobQueue(
-                    scheduler=AsyncIOScheduler(timezone=TIMEZONE)
-                )
-            )
-            .build()
-        )
-        
-        # Настройка ConversationHandler
-        conv_handler = ConversationHandler(
-            entry_points=[
-                CommandHandler("start", start),
-                MessageHandler(filters.Regex("^📨 Отправить заявку$"), start_request)
-            ],
-            states={
-                MAIN_MENU: [
-                    MessageHandler(filters.Regex("^📨 Отправить заявку$"), start_request)
-                ],
-                GET_LOCATION: [
-                    MessageHandler(filters.LOCATION, process_location),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_location),
-                    MessageHandler(filters.Regex("^🔙 Назад$"), cancel)
-                ],
-                GET_PHONE: [
-                    MessageHandler(filters.CONTACT, process_phone),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_phone),
-                    MessageHandler(filters.Regex("^🔙 Назад$"), cancel)
-                ]
-            },
-            fallbacks=[CommandHandler("cancel", cancel)],
-        )
-        
-        application.add_handler(conv_handler)
-        application.run_polling()
-        
-        logger.info("Бот успешно остановлен")
-        
-    except Exception as e:
-        logger.critical(f"Ошибка запуска бота: {e}")
-        raise
+    timestamp = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    append_to_sheet([
+        address,
+        phone,
+        timestamp,
+        "Новая"
+    ])
+
+    await update.message.reply_text(
+        "✅ Заявка успешно отправлена!\nМы свяжемся с вами в ближайшее время.",
+        reply_markup=main_keyboard
+    )
+    return CHOOSING
+
+# ❓ Частые вопросы
+async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "❓ Часто задаваемые вопросы:\n"
+        "- Сколько стоит услуга?\n"
+        "- Какие документы нужны?\n"
+        "- Сроки выполнения работ?\n\n"
+        "📞 Мы готовы ответить на ваши вопросы в чате или по телефону!"
+    )
+
+# 📞 Контакты
+async def contacts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📞 Наши контакты:\n"
+        "Телефон: +7-XXX-XXX-XX-XX\n"
+        "Email: example@mail.com\n"
+        "Адрес: г. Пример, ул. Улица, д. 1"
+    )
+
+# ℹ️ О нас
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🏗 Мы оказываем кадастровые и геодезические услуги:\n"
+        "- Межевание\n"
+        "- Съемка участка\n"
+        "- Подготовка кадастровых планов и схем\n"
+        "Работаем по всей области."
+    )
+
+# ❌ Отмена
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Выход из режима ввода.",
+        reply_markup=main_keyboard
+    )
+    return ConversationHandler.END
+
+# 🚀 Запуск бота
+async def run_client_bot():
+    from config import TELEGRAM_CLIENT_TOKEN
+
+    app = Application.builder().token(TELEGRAM_CLIENT_TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("📨 Отправить заявку"), send_request)],
+        states={
+            LOCATION: [MessageHandler(filters.LOCATION | filters.TEXT & ~filters.COMMAND, handle_location)],
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv_handler)
+    app.add_handler(MessageHandler(filters.Regex("❓ Частые вопросы"), faq))
+    app.add_handler(MessageHandler(filters.Regex("📞 Контакты"), contacts))
+    app.add_handler(MessageHandler(filters.Regex("ℹ️ О нас"), about))
+
+    await app.run_polling()
