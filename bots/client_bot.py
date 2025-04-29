@@ -9,38 +9,15 @@
 
 ▌ Особенности реализации:
 ✔ Поддержка python-telegram-bot 20.x
-✔ Корректная обработка Unicode (emoji, кириллица)
-✔ Подробное логирование всех операций
-✔ Настройка временной зоны (Europe/Moscow)
+✔ Корректная работа с временными зонами
+✔ Подробное логирование операций
+✔ Обработка ошибок ввода-вывода
 """
 
-import sys
 import logging
 import pytz
 from datetime import datetime
 from typing import Dict, Any
-
-# ====================
-# ⚙️ НАСТРОЙКА СИСТЕМЫ
-# ====================
-
-# Установка временной зоны
-TIMEZONE = pytz.timezone('Europe/Moscow')
-
-# Конфигурация логирования
-logging.basicConfig(
-    format='▌ %(asctime)s │ %(name)-15s │ %(levelname)-8s │ %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler('client_bot.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# ====================
-# 📦 ИМПОРТ КОМПОНЕНТОВ
-# ====================
 
 from telegram import (
     Update,
@@ -54,9 +31,29 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     ConversationHandler,
-    filters
+    filters,
+    JobQueue
 )
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from services.gsheets import append_to_sheet
+
+# ====================
+# ⚙️ НАСТРОЙКИ СИСТЕМЫ
+# ====================
+
+# Временная зона (явно указываем pytz для совместимости)
+TIMEZONE = pytz.timezone('Europe/Moscow')
+
+# Настройка логирования
+logging.basicConfig(
+    format='▌ %(asctime)s │ %(name)-15s │ %(levelname)-8s │ %(message)s',
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler('client_bot.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ====================
 # 🗂 СОСТОЯНИЯ ДИАЛОГА
@@ -109,16 +106,16 @@ TEXTS = {
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработчик команды /start - показывает главное меню"""
-    menu_buttons = [
+    buttons = [
         ["📨 Отправить заявку"],
-        ["❓ Частые вопросы", "📞 Контакты"],
+        ["❓ Вопросы", "📞 Контакты"],
         ["ℹ️ О компании"]
     ]
     
     await update.message.reply_text(
         text=TEXTS['welcome'],
         reply_markup=ReplyKeyboardMarkup(
-            menu_buttons,
+            buttons,
             resize_keyboard=True,
             input_field_placeholder="Выберите действие..."
         ),
@@ -128,7 +125,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает процесс оформления новой заявки"""
-    location_buttons = [
+    buttons = [
         [KeyboardButton("📍 Отправить геолокацию", request_location=True)],
         ["🏠 Указать адрес"],
         ["🔙 Назад"]
@@ -137,7 +134,7 @@ async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text(
         text=TEXTS['request'],
         reply_markup=ReplyKeyboardMarkup(
-            location_buttons,
+            buttons,
             resize_keyboard=True
         ),
         parse_mode='HTML'
@@ -155,14 +152,14 @@ async def process_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 'lat': loc.latitude,
                 'lon': loc.longitude
             }
-            logger.info("Получена геолокация: %s,%s", loc.latitude, loc.longitude)
+            logger.info(f"Получена геолокация: {loc.latitude},{loc.longitude}")
         else:
             # Текстовый адрес
             context.user_data['location'] = {
                 'type': 'address',
                 'text': update.message.text
             }
-            logger.info("Получен адрес: %s", update.message.text)
+            logger.info(f"Получен адрес: {update.message.text}")
 
         # Запрос телефона
         phone_buttons = [
@@ -181,7 +178,7 @@ async def process_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return GET_PHONE
 
     except Exception as e:
-        logger.error("Ошибка обработки местоположения: %s", e)
+        logger.error(f"Ошибка обработки местоположения: {e}")
         await update.message.reply_text("⚠️ Ошибка обработки данных")
         return await start(update, context)
 
@@ -201,7 +198,7 @@ async def process_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             phone=phone
         )
         
-        logger.info("Заявка сохранена: %s, %s", address, phone)
+        logger.info(f"Заявка сохранена: {address}, {phone}")
         
         # Подтверждение пользователю
         await update.message.reply_text(
@@ -213,7 +210,7 @@ async def process_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await start(update, context)
 
     except Exception as e:
-        logger.error("Ошибка сохранения заявки: %s", e)
+        logger.error(f"Ошибка сохранения заявки: {e}")
         await update.message.reply_text(
             "⚠️ Произошла ошибка. Пожалуйста, попробуйте позже.",
             reply_markup=ReplyKeyboardRemove()
@@ -221,7 +218,7 @@ async def process_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await start(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отменяет текущее действие и возвращает в меню"""
+    """Отменяет текущее действие"""
     await update.message.reply_text(
         "Действие отменено",
         reply_markup=ReplyKeyboardRemove()
@@ -237,10 +234,17 @@ def run_client_bot(token: str) -> None:
     try:
         logger.info("Инициализация клиентского бота...")
         
-        # Создаем Application Builder
-        application = Application.builder() \
-            .token(token) \
+        # Создаем Application с явным указанием временной зоны
+        application = (
+            Application.builder()
+            .token(token)
+            .job_queue(
+                job_queue=JobQueue(
+                    scheduler=AsyncIOScheduler(timezone=TIMEZONE)
+                )
+            )
             .build()
+        )
         
         # Настройка ConversationHandler
         conv_handler = ConversationHandler(
@@ -266,14 +270,11 @@ def run_client_bot(token: str) -> None:
             fallbacks=[CommandHandler("cancel", cancel)],
         )
         
-        # Регистрация обработчиков
         application.add_handler(conv_handler)
-        
-        # Запуск бота
-        logger.info("Бот запущен в режиме polling...")
         application.run_polling()
+        
         logger.info("Бот успешно остановлен")
         
     except Exception as e:
-        logger.critical("Критическая ошибка: %s", e)
+        logger.critical(f"Ошибка запуска бота: {e}")
         raise
