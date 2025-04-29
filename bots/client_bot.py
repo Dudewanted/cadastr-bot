@@ -80,11 +80,17 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ☎️ Обработка телефона и отправка заявки
 async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.text.strip()
+    # Проверка формата телефона (пример: +7 999 123 45 67)
+    if not re.match(r'^(\+7|8)\s?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}$', phone):
+        await update.message.reply_text("❌ Неверный формат номера. Пожалуйста, введите номер в формате +7 XXX XXX XX XX")
+        return PHONE
+
     context.user_data["phone"] = phone
     address = context.user_data.get("address", "Не указано")
-
     timestamp = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
     append_to_sheet([
+        "",  # Пустой ID (заполняется автоматически в Google Sheets)
         address,
         phone,
         timestamp,
@@ -92,45 +98,8 @@ async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
 
     await update.message.reply_text(
-        "✅ Заявка успешно отправлена!\nМы свяжемся с вами в ближайшее время.",
-        reply_markup=main_keyboard
-    )
-    return CHOOSING
-
-# ❓ Частые вопросы
-async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "❓ Часто задаваемые вопросы:\n"
-        "- Сколько стоит услуга?\n"
-        "- Какие документы нужны?\n"
-        "- Сроки выполнения работ?\n\n"
-        "📞 Мы готовы ответить на ваши вопросы в чате или по телефону!"
-    )
-
-# 📞 Контакты
-async def contacts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📞 Наши контакты:\n"
-        "Телефон: +7-XXX-XXX-XX-XX\n"
-        "Email: example@mail.com\n"
-        "Адрес: г. Пример, ул. Улица, д. 1"
-    )
-
-# ℹ️ О нас
-async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🏗 Мы оказываем кадастровые и геодезические услуги:\n"
-        "- Межевание\n"
-        "- Съемка участка\n"
-        "- Подготовка кадастровых планов и схем\n"
-        "Работаем по всей области."
-    )
-
-# ❌ Отмена
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Выход из режима ввода.",
-        reply_markup=main_keyboard
+        "✅ Ваша заявка отправлена!\nНаш специалист свяжется с вами в ближайшее время.",
+        reply_markup=ReplyKeyboardMarkup([["📞 Контакты", "🔙 Главное меню"]], resize_keyboard=True)
     )
     return ConversationHandler.END
 

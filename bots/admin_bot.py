@@ -29,16 +29,16 @@ logger = logging.getLogger(__name__)
 # 🔔 Уведомление о новой заявке (вызывается Google Apps Script через Webhook)
 async def notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        data = update.message.text  # Ждём формат: ID;Адрес;Телефон;Дата;Статус
-
+        data = update.message.text  # Формат: ID;Адрес;Телефон;Дата;Статус
         if ";" not in data:
             await update.message.reply_text("⚠️ Получены некорректные данные.")
             return
 
         id_, address, phone, date, status = data.split(";")
+        phone_url = "tel:" + phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📞 Позвонить", url=f"tel:{phone}")],
+            [InlineKeyboardButton("📞 Позвонить", url=phone_url)],
             [
                 InlineKeyboardButton("🟡 В работе", callback_data=f"status|{id_}|В работе"),
                 InlineKeyboardButton("✅ Завершена", callback_data=f"status|{id_}|Завершена"),
@@ -46,20 +46,17 @@ async def notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
         msg = (
-            f"📬 Новая заявка:\n\n"
-            f"📍 Адрес: {address}\n"
-            f"📞 Телефон: {phone}\n"
-            f"🕒 Дата: {date}\n"
-            f"📌 Статус: {status}"
+            f"📬 <b>Новая заявка</b>\n\n"            f"<b>📍 Адрес:</b> {address}\n"            f"<b>📞 Телефон:</b> {phone}\n"            f"<b>🕒 Дата:</b> {date}\n"            f"<b>📌 Статус:</b> {status}"
         )
 
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=msg,
+            parse_mode="HTML",
             reply_markup=keyboard
         )
-
     except Exception as e:
+        logger.exception("Ошибка при обработке уведомления: %s", e)
         logger.exception("Ошибка при обработке уведомления")
 
 # 🔄 Обработка callback кнопок (смена статуса)
@@ -96,3 +93,31 @@ async def run_admin_bot():
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     await app.run_polling()
+async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        rows = sheet.get_all_values()[1:]  # Пропускаем заголовки
+        if not rows:
+            await update.message.reply_text("❗️Заявок пока нет.")
+            return
+
+        # Группировка по статусу
+        new = [row for row in rows if row[4] == "Новая"]
+        working = [row for row in rows if row[4] == "В работе"]
+        done = [row for row in rows if row[4] == "Завершена"]
+
+        def format_entries(entries):
+            if not entries:
+                return "—"
+            return "\n".join([f"#{row[0]} 📍 {row[1]} 📞 {row[2]} 🕒 {row[3]}" for row in entries])
+
+        msg = (
+            "<b>📋 Панель управления заявками</b>\n\n"
+            f"<b>🆕 Новые:</b>\n{format_entries(new)}\n\n"
+            f"<b>🛠 В работе:</b>\n{format_entries(working)}\n\n"
+            f"<b>✅ Завершены:</b>\n{format_entries(done)}"
+        )
+
+        await update.message.reply_text(msg, parse_mode="HTML")
+    except Exception as e:
+        logger.exception("Ошибка в панели: %s", e)
+        await update.message.reply_text("❌ Не удалось загрузить панель.")
